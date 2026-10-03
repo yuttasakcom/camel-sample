@@ -4,7 +4,8 @@ import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.component.kafka.KafkaConstants;
 
 /**
- * Moves bank transactions from the Go producer's topic to the topic read by the Java consumer.
+ * Syncs bank transactions from the source cluster (Go producer's topic)
+ * to the sync cluster (topic read by the Java consumer).
  */
 public class TransactionRouterRoute extends RouteBuilder {
 
@@ -16,7 +17,7 @@ public class TransactionRouterRoute extends RouteBuilder {
                 .logExhausted(true));
 
         from("kafka:{{kafka.source-topic}}"
-                + "?brokers={{kafka.brokers}}"
+                + "?brokers={{kafka.source-brokers}}"
                 + "&groupId={{kafka.group-id}}"
                 + "&autoOffsetReset={{kafka.auto-offset-reset}}")
                 .routeId("transaction-logs-to-consumer-ddp")
@@ -24,9 +25,9 @@ public class TransactionRouterRoute extends RouteBuilder {
                 .log("move partition=${header." + KafkaConstants.PARTITION + "}"
                         + " offset=${header." + KafkaConstants.OFFSET + "}"
                         + " key=${header." + KafkaConstants.KEY + "}"
-                        + " -> {{kafka.target-topic}}")
+                        + " -> {{kafka.target-brokers}}/{{kafka.target-topic}}")
                 .to("kafka:{{kafka.target-topic}}"
-                        + "?brokers={{kafka.brokers}}"
+                        + "?brokers={{kafka.target-brokers}}"
                         + "&requestRequiredAcks=all");
     }
 }

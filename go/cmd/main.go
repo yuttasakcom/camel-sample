@@ -80,6 +80,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid PRODUCE_INTERVAL: %v", err)
 	}
+	shutdownTimeout, err := time.ParseDuration(getEnv("SHUTDOWN_TIMEOUT", "10s"))
+	if err != nil {
+		log.Fatalf("invalid SHUTDOWN_TIMEOUT: %v", err)
+	}
 
 	writer := &kafka.Writer{
 		Addr:                   kafka.TCP(broker),
@@ -88,25 +92,37 @@ func main() {
 		RequiredAcks:           kafka.RequireAll,
 		AllowAutoTopicCreation: true,
 	}
-	defer func() {
-		if err := writer.Close(); err != nil {
-			log.Printf("failed to close writer: %v", err)
-		}
-	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	log.Printf("producing to topic %q on %s every %s (Ctrl+C to stop)", topic, broker, interval)
 
+	sent := produce(ctx, writer, interval, shutdownTimeout)
+
+	// Restore default signal handling so a second Ctrl+C force-quits a stuck shutdown.
+	stop()
+	log.Printf("shutting down: sent %d messages, flushing writer (timeout %s, Ctrl+C again to force)", sent, shutdownTimeout)
+
+	if err := closeWriter(writer, shutdownTimeout); err != nil {
+		log.Printf("shutdown error: %v", err)
+		os.Exit(1)
+	}
+	log.Println("shutdown complete")
+}
+
+// produce sends a transaction every interval until ctx is cancelled.
+// A write already in progress is allowed to finish (up to writeTimeout) instead of being aborted,
+// so a message is never cut off halfway when a stop signal arrives.
+func produce(ctx context.Context, writer *kafka.Writer, interval, writeTimeout time.Duration) int {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	sent := 0
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("shutting down")
-			return
+			return sent
 		case <-ticker.C:
 			tx := newTransaction()
 			value, err := json.Marshal(tx)
@@ -120,18 +136,34 @@ func main() {
 				key = tx.ToAccount
 			}
 
-			err = writer.WriteMessages(ctx, kafka.Message{
+			writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+			err = writer.WriteMessages(writeCtx, kafka.Message{
 				Key:   []byte(key),
 				Value: value,
 			})
+			cancel()
 			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
 				log.Printf("write error: %v", err)
 				continue
 			}
+			sent++
 			fmt.Printf("sent %s %-8s %10.2f %s [%s]\n", tx.TransactionID, tx.Type, tx.Amount, tx.Currency, tx.Status)
 		}
+	}
+}
+
+// closeWriter flushes pending messages and closes connections, giving up after timeout.
+func closeWriter(writer *kafka.Writer, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- writer.Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("close writer: %w", err)
+		}
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("close writer: timed out after %s", timeout)
 	}
 }
