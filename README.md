@@ -59,6 +59,7 @@ sequenceDiagram
 ```
 .
 ├── docker-compose.yml      # Kafka (KRaft) + Kafka UI
+├── clear-message.sh        # ลบ message ใน topic
 ├── go/                     # Producer
 │   └── cmd/main.go
 ├── camel/                  # Router: transaction-logs -> consumer-ddp
@@ -183,7 +184,16 @@ go run ./cmd
 
 เปิด http://localhost:8080 → Topics → `transaction-logs` หรือ `consumer-ddp`
 
-**6. ปิดระบบ**
+**6. ลบ message ใน topic** (ถ้าต้องการเริ่มทดสอบใหม่)
+
+```bash
+./clear-message.sh                  # ลบใน transaction-logs และ consumer-ddp
+./clear-message.sh transaction-logs # ลบเฉพาะ topic ที่ระบุ
+```
+
+ลบเฉพาะ message ส่วนตัว topic และการตั้งค่ายังอยู่ message ใหม่จะได้ offset ต่อจากเดิม
+
+**7. ปิดระบบ**
 
 กด Ctrl+C ในแต่ละ terminal แล้วรัน
 
